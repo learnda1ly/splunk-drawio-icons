@@ -1,26 +1,30 @@
 # splunk-drawio-icons
 
-Jupyter notebook pipeline that builds [diagrams.net / draw.io](https://www.diagrams.net/) shape libraries from Splunk’s official icon sheet [`Splunk_Documentation_Icons_August2018.png`](https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment).
+Build and use [diagrams.net / draw.io](https://www.diagrams.net/) shape libraries from Splunk’s official icon sheet [`Splunk_Documentation_Icons_August2018.png`](https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment).
+
+Prebuilt libraries are in **`dist/`** (committed). Rebuild them anytime with the scripts below.
+
+## Quick start (draw.io only)
+
+1. Clone this repo.
+2. Open [diagrams.net](https://app.diagrams.net/) or the desktop app.
+3. **File → Open Library From → Device**
+4. Select **`dist/Splunk-Icons-adaptive.xml`** (recommended for light/dark themes).
+
+Optional: **`dist/Splunk-Connectors.xml`** for Splunk-style connector lines.
+
+Use the **`.xml`** files. The matching **`.drawiolib`** files are the same JSON payload without the XML wrapper (for tooling); draw.io’s library import expects **`.xml`**.
 
 ## Outputs
 
 | File | Description |
 |------|-------------|
-| `dist/Splunk-Icons-adaptive.xml` | CSS `light-dark()` SVG silhouettes — **recommended** for light and dark themes |
+| `dist/Splunk-Icons-adaptive.xml` | Theme-aware SVG silhouettes (`light-dark()`) — **recommended** |
 | `dist/Splunk-Icons-color.xml` | Full-color PNG icons |
-| `dist/Splunk-Icons-dark.xml` | Inverted-color PNG icons for dark backgrounds |
+| `dist/Splunk-Icons-dark.xml` | Inverted PNG icons for dark backgrounds |
+| `dist/Splunk-Connectors.xml` | Connector / edge style presets |
 
-Intermediate artifacts (`dist/crops/`, `manifest.json`, `labels_final.json`, etc.) are written while the notebook runs.
-
-## Pipeline
-
-1. **Crop** — detect icon bounding boxes on the source sheet
-2. **OCR** — read labels printed below each icon
-3. **Fuzzy-match** — align OCR text to a seed vocabulary of known Splunk icon titles
-4. **Filter** — drop bare single-letter noise (but keep `JS`, `HTML`, `CSS`, `SDK`, and titles containing *custom visualization*, *simple xml*, or *panels html*)
-5. **Build libraries** — emit the three draw.io XML libraries
-
-## Setup
+## Setup (rebuild from source)
 
 ```bash
 python3 -m venv .venv
@@ -28,30 +32,53 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Install [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) on your system (required by `pytesseract`):
+Install [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) if you will re-run OCR:
 
 - **macOS:** `brew install tesseract`
 - **Ubuntu/Debian:** `sudo apt install tesseract-ocr`
-- **Windows:** [installer](https://github.com/UB-Mannheim/tesseract/wiki)
+- **Windows:** [UB Mannheim installer](https://github.com/UB-Mannheim/tesseract/wiki)
 
-Download the official Splunk icon sheet and place it at:
+Place the Splunk sheet at:
 
-```
+```text
 source/Splunk_Documentation_Icons_August2018.png
 ```
 
-Then open and run `splunk_drawio_icons_pipeline.ipynb`.
+(`source/*.png` is gitignored; the sheet is not redistributed in this repo.)
 
-## Import into draw.io
+## Scripts
 
-1. Open [diagrams.net](https://app.diagrams.net/) or the desktop app
-2. **File → Open Library From → Device**
-3. Select one of the `dist/Splunk-Icons-*.xml` files
+Run from the repo root with the venv activated.
+
+| Command | Purpose |
+|---------|---------|
+| `python run_pipeline.py all` | Full pipeline: crops → OCR → labels → libraries |
+| `python run_pipeline.py crops` | Detect icons; write `dist/crops/`, `manifest.json`, `connectors.json` |
+| `python run_pipeline.py ocr` | OCR label text → `labels_ocr.json` |
+| `python run_pipeline.py labels` | Fuzzy-match titles → `labels_final.json` |
+| `python run_pipeline.py build` | Build `Splunk-Icons-*.xml` from existing `dist/` data |
+| `python edit_labels.py` | Web UI to edit titles → http://127.0.0.1:8765 |
+| `python edit_labels.py --rebuild` | Rebuild libraries after saving labels |
+| `python crop_picker.py` | Draw custom crops on the sheet → http://127.0.0.1:8766 |
+
+Implementation details live in **`splunk_icons_pipeline.py`**.
+
+## Tutorial notebook
+
+Open **`splunk_drawio_icons_pipeline.ipynb`** for a guided walkthrough (setup, CLI commands, label editor, custom crops, draw.io import). It is documentation-first; the notebook calls the same scripts and Python module as above.
+
+## Pipeline overview
+
+1. **Crop** — scanline grid on the icon sheet  
+2. **OCR** — read alpha-only labels under each cell  
+3. **Fuzzy-match** — map OCR to known Splunk icon titles  
+4. **Build** — emit three icon libraries + connectors  
 
 ## Source documentation
 
-- [Draw a diagram of your deployment](https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment) — Splunk Enterprise admin guide
+- [Draw a diagram of your deployment](https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment) — Splunk Enterprise admin guide  
+- [Custom shape library format](https://www.drawio.com/docs/reference/format-custom-shape-library/) — draw.io
 
 ## Legal note
 
-The icons are Splunk artwork. This repository ships the **notebook and build tooling only** — it does **not** redistribute Splunk icon binaries. Obtain the source PNG from Splunk’s documentation and use the generated libraries in accordance with Splunk’s terms.
+Icons are Splunk artwork. This repository ships **generated** libraries under `dist/` and build tooling. Obtain the source PNG from Splunk’s documentation and use the libraries in accordance with Splunk’s terms.
