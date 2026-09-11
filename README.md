@@ -9,7 +9,7 @@ Prebuilt libraries are in **`dist/`** (committed). Rebuild them anytime with the
 1. Clone this repo.
 2. Open [diagrams.net](https://app.diagrams.net/) or the desktop app.
 3. **File → Open Library From → Device**
-4. Select **`dist/Splunk-Icons-adaptive.xml`** (recommended for light/dark themes).
+4. Select **`dist/Splunk-Icons-configurable.xml`** if you want Visio-like shapes (fill, line color, hostname/IP). Use **`dist/Splunk-Icons-adaptive.xml`** for theme-aware picture icons.
 
 Optional: **`dist/Splunk-Connectors.xml`** for Splunk-style connector lines.
 
@@ -19,10 +19,25 @@ Use the **`.xml`** files. The matching **`.drawiolib`** files are the same JSON 
 
 | File | Description |
 |------|-------------|
-| `dist/Splunk-Icons-adaptive.xml` | Theme-aware SVG silhouettes (`light-dark()`) — **recommended** |
-| `dist/Splunk-Icons-color.xml` | Full-color PNG icons |
-| `dist/Splunk-Icons-dark.xml` | Inverted PNG icons for dark backgrounds |
+| `dist/Splunk-Icons-configurable.xml` | Native draw.io **stencils** — Style panel fill/line, N/E/S/W connection points, stored `title` / `hostname` / `ip` / `notes` |
+| `dist/Splunk-Icons-adaptive.xml` | Theme-aware SVG **pictures** (`cssVars` + `light-dark()`) — good in dark mode, not Style-panel fill/line |
+| `dist/Splunk-Icons-color.xml` | Full-color PNG pictures (fixed colors — poor contrast on dark canvases) |
+| `dist/Splunk-Icons-dark.xml` | Inverted PNG pictures when you want color on a **dark** background only |
 | `dist/Splunk-Connectors.xml` | Connector / edge style presets |
+
+### Configurable icons (fill, line, hostname, IP)
+
+These are real draw.io shapes, not pasted images. After you drop one on the canvas:
+
+1. **Fill / line / line width** — Style panel on the right (same as a rectangle). These icons are line art: **Fill** is the icon color (black in light mode, white in dark mode). **Line color** is an optional outline around the artwork (off by default). To put a colored card behind an icon, drop a rectangle in back and group it.
+2. **Hostname, IP, notes** — select the shape → **Edit → Edit Data** (`Ctrl+M` / `Cmd+M`). Values are stored on that instance in the `.drawio` file. The visible label is `%title%`, `%hostname%`, and `%ip%` (empty fields stay blank).
+3. **Connectors** — hover to see N/E/S/W points, or use the blue arrows.
+
+What draw.io **cannot** do with these icons:
+
+- Recolor the original **PNG pixels**. A raster image has no fill or stroke for the Style panel to change. The configurable library is a vector silhouette traced from each crop.
+- Keep official **multi-color** Splunk art *and* independently recolor every region from one Fill picker. Use `Splunk-Icons-color.xml` for the painted look; use the configurable library when you need fill/line/data.
+- Visio ShapeSheet formulas or a custom property dialog. draw.io’s equivalent is **Edit Data** plus `%placeholder%` labels.
 
 ## Setup (rebuild from source)
 
@@ -72,7 +87,7 @@ Open **`splunk_drawio_icons_pipeline.ipynb`** for a guided walkthrough (setup, C
 1. **Crop** — scanline grid on the icon sheet  
 2. **OCR** — read alpha-only labels under each cell  
 3. **Fuzzy-match** — map OCR to known Splunk icon titles  
-4. **Build** — emit three icon libraries + connectors  
+4. **Build** — emit four icon libraries + connectors (configurable stencils are traced one crop at a time)  
 
 ## Source documentation
 

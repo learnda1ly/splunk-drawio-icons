@@ -22,6 +22,9 @@ from PIL import Image, ImageOps, ImageFilter
 import pytesseract
 from scipy import ndimage
 
+from icon_stencil import stencil_preview_svg, svg_to_stencil
+from icon_vector import vectorize_crop
+
 Image.MAX_IMAGE_PIXELS = None
 
 ROOT = Path(__file__).resolve().parent
@@ -35,6 +38,10 @@ CROPS_DIR.mkdir(exist_ok=True)
 CUSTOM_CROPS_DIR = DIST_DIR / 'custom_crops'
 CUSTOM_MANIFEST = DIST_DIR / 'custom_crops.json'
 CUSTOM_CROPS_DIR.mkdir(exist_ok=True)
+
+# Single-icon SVG experiment (added to color library with a distinct sidebar title).
+SVG_PROTOTYPE_CROP = 'icon_072.png'
+SVG_PROTOTYPE_TITLE = 'Indexer — SVG prototype (icon_072)'
 
 
 def labels_for_build(labels_final: list[dict]) -> list[dict]:
@@ -115,6 +122,12 @@ def encode_mx(data: str) -> str:
     return base64.b64encode(compressed).decode('ascii')
 
 
+def decode_mx(data: str) -> str:
+    """Inverse of encode_mx / compress_mx_graph."""
+    raw = zlib.decompress(base64.b64decode(data), wbits=-15)
+    return urllib.parse.unquote(raw.decode('utf-8'))
+
+
 def display_size(w: int, h: int, max_size: int = 96) -> tuple[int, int]:
     scale = min(max_size / w, max_size / h, 1.0)
     return max(1, int(w * scale)), max(1, int(h * scale))
@@ -154,25 +167,38 @@ def alpha_mask_png(png_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
+_ADAPTIVE_FILL = 'var(--icon-color, light-dark(#111111, #ffffff))'
+
+
 def silhouette_svg(png_bytes: bytes, w: int, h: int) -> str:
-    """SVG silhouette using draw.io cssVars (--icon-color) for light/dark."""
-    mask_bytes = alpha_mask_png(png_bytes)
+    """SVG silhouette themed via cssVars and light-dark() fallback (draw.io 30.4+)."""
+    img = Image.open(io.BytesIO(png_bytes)).convert('RGBA')
+    if img.size != (w, h):
+        img = img.resize((w, h), Image.LANCZOS)
+    scaled = io.BytesIO()
+    img.save(scaled, format='PNG')
+    mask_bytes = alpha_mask_png(scaled.getvalue())
     b64 = base64.b64encode(mask_bytes).decode('ascii')
     mid = hashlib.sha1(mask_bytes).hexdigest()[:8]
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+        f'viewBox="0 0 {w} {h}" color-scheme="light dark">'
         f'<defs><mask id="m{mid}">'
         f'<image width="{w}" height="{h}" href="data:image/png;base64,{b64}"/>'
         f'</mask></defs>'
-        f'<rect width="{w}" height="{h}" fill="var(--icon-color, #111111)" mask="url(#m{mid})"/>'
+        f'<rect width="{w}" height="{h}" fill="{_ADAPTIVE_FILL}" mask="url(#m{mid})"/>'
         '</svg>'
     )
 
 
 def adaptive_image_entry(title: str, w: int, h: int, svg_uri: str) -> dict:
-    """Adaptive icon entry — cssVars lets draw.io apply light-dark() (v30.4+)."""
+    """Adaptive icon entry — cssVars + light-dark() for light/dark editor modes."""
     entry = image_entry(title, w, h, svg_uri)
-    entry['style'] = 'cssVars=icon-color;--icon-color=light-dark(#111111,#ffffff);'
+    # cssVars must be declared; --icon-color may use light-dark (no semicolons in values).
+    entry['style'] = (
+        'cssVars=icon-color;'
+        '--icon-color=light-dark(#111111,#ffffff);'
+    )
     return entry
 
 
@@ -277,6 +303,40 @@ def image_entry(
         'aspect': aspect,
     }
     return entry
+
+
+def configurable_entry(title: str, w: int, h: int, svg: str) -> dict:
+    """Native stencil + Edit Data fields (title, hostname, ip, notes)."""
+    stencil = svg_to_stencil(svg, name=title)
+    dw, dh = display_size(w, h)
+    title_attr = xml_utils.escape(title, {'"': '&quot;'})
+    style = (
+        f'shape=stencil({encode_mx(stencil)});'
+        'whiteSpace=wrap;html=1;aspect=fixed;'
+        'verticalLabelPosition=bottom;verticalAlign=top;align=center;'
+        'spacingTop=4;fontSize=11;'
+        # fillColor=default is shape *background* (white in light, black in dark).
+        # These icons are line art painted with fill, so invert that pair.
+        'fillColor=light-dark(#111111,#ffffff);strokeColor=none;strokeWidth=1.5;'
+    )
+    label = '%title%&lt;br&gt;%hostname%&lt;br&gt;%ip%'
+    raw = (
+        '<mxGraphModel><root>'
+        '<mxCell id="0"/><mxCell id="1" parent="0"/>'
+        f'<object id="2" label="{label}" title="{title_attr}" '
+        'hostname="" ip="" notes="" placeholders="1">'
+        f'<mxCell style="{style}" vertex="1" parent="1">'
+        f'<mxGeometry width="{dw}" height="{dh}" as="geometry"/>'
+        '</mxCell></object>'
+        '</root></mxGraphModel>'
+    )
+    return {
+        'xml': compress_mx_graph(raw),
+        'w': dw,
+        'h': dh,
+        'title': title,
+        'tags': f'splunk configurable {title.lower()}',
+    }
 
 
 
@@ -905,6 +965,7 @@ def step_build(labels_final: list[dict], connectors: list[dict]) -> None:
     color_shapes = []
     dark_shapes = []
     adaptive_shapes = []
+    configurable_shapes = []
     color_index: dict[str, list[str]] = {}
 
     t0 = time.perf_counter()
@@ -930,7 +991,44 @@ def step_build(labels_final: list[dict], connectors: list[dict]) -> None:
 
         color_shapes.append(image_entry(item['title'], w, h, png_data_uri(png_bytes)))
         dark_shapes.append(image_entry(item['title'], w, h, png_data_uri(dark_bytes)))
-        adaptive_shapes.append(adaptive_image_entry(item['title'], w, h, svg_data_uri(svg)))
+        adaptive_shapes.append(adaptive_image_entry(item['title'], dw, dh, svg_data_uri(svg)))
+
+        svg_trace = vectorize_crop(crop, mode='adaptive', width=w, height=h)
+        configurable_shapes.append(configurable_entry(item['title'], w, h, svg_trace))
+
+        if item['file'] == SVG_PROTOTYPE_CROP:
+            svg_color = vectorize_crop(crop, mode='color', width=w, height=h)
+            proto_dir = DIST_DIR / 'prototypes'
+            proto_dir.mkdir(exist_ok=True)
+            (proto_dir / 'indexer_icon_072.svg').write_text(svg_color, encoding='utf-8')
+            stencil_xml = svg_to_stencil(svg_trace, name=item['title'])
+            (proto_dir / 'indexer_icon_072.stencil.xml').write_text(stencil_xml, encoding='utf-8')
+            (proto_dir / 'indexer_icon_072.stencil.svg').write_text(
+                stencil_preview_svg(stencil_xml), encoding='utf-8',
+            )
+            sample_model = decode_mx(configurable_shapes[-1]['xml'])
+            sample_model = sample_model.replace(
+                'hostname="" ip="" notes=""',
+                'hostname="idx1.example.com" ip="10.0.0.12" notes="cluster=prod"',
+            )
+            sample_model = sample_model.replace(
+                '<mxGeometry ',
+                '<mxGeometry x="80" y="40" ',
+                1,
+            )
+            (proto_dir / 'configurable-indexer.drawio').write_text(
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<mxfile host="app.diagrams.net">\n'
+                '<diagram name="Configurable Indexer" id="indexer">\n'
+                f'{sample_model}\n'
+                '</diagram>\n'
+                '</mxfile>\n',
+                encoding='utf-8',
+            )
+            color_shapes.append(
+                image_entry(SVG_PROTOTYPE_TITLE, w, h, svg_data_uri(svg_color)),
+            )
+            log.info('Added SVG prototype library entry: %s', SVG_PROTOTYPE_TITLE)
 
         if n == 1 or n % 50 == 0 or n == len(labeled):
             log.info('Packaged %d/%d icon shapes (%.1fs)', n, len(labeled), time.perf_counter() - t0)
@@ -964,13 +1062,13 @@ def step_build(labels_final: list[dict], connectors: list[dict]) -> None:
         DIST_DIR / 'Splunk-Icons-color.xml': color_shapes,
         DIST_DIR / 'Splunk-Icons-dark.xml': dark_shapes,
         DIST_DIR / 'Splunk-Icons-adaptive.xml': adaptive_shapes,
+        DIST_DIR / 'Splunk-Icons-configurable.xml': configurable_shapes,
         DIST_DIR / 'Splunk-Connectors.xml': connector_shapes,
     }
 
     for path, shapes in library_sets.items():
         write_library(path, shapes)
-        count = len(color_shapes) if 'Icons' in path.name else len(connector_shapes)
-        log.info('Wrote %s + %s (%d entries)', path, path.with_suffix('.drawiolib'), count)
+        log.info('Wrote %s + %s (%d entries)', path, path.with_suffix('.drawiolib'), len(shapes))
 
     log.info('Color index: %s', ', '.join(f"{k}={len(v)}" for k, v in sorted(color_index.items())))
     log.info('Done — import in draw.io via File → Open Library From → Device')

@@ -3,3 +3,4 @@ numpy>=1.24.0
 scipy>=1.10.0
 pytesseract>=0.3.10
 nbformat>=5.9.0
+vtracer>=0.6.15
