@@ -14,21 +14,25 @@ The icon artwork is Splunk’s. This repo ships **scripts only**. Generated libr
 
 ```bash
 uv sync
-uv run python run_pipeline.py all    # crops → OCR → labels → libraries
-uv run python app.py                 # http://127.0.0.1:8765
+uv run python run_pipeline.py all    # crops → titles → libraries
+uv run python app.py                 # optional workbench → http://127.0.0.1:8765
 ```
 
 4. In draw.io: **File → Open Library From → Device** and choose a generated **`.xml`** file from your local `dist/` (not `.drawiolib`).
 
-Install [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) only if you re-run OCR.
+For the August 2018 sheet you do **not** need to hand-label icons or draw extra crops. `canonical_titles.json` names each icon by grid position (row, left to right). `run_pipeline.py all` writes about 195 shapes plus connector presets. [EasyOCR](https://github.com/JaidedAI/EasyOCR) runs only if that catalog has no name for a detected icon. No Tesseract install, and no Jupyter.
 
 ## Workbench
+
+Optional. After a pipeline run, open `uv run python app.py`.
 
 | Stage | What it does |
 |-------|----------------|
 | **Tutorial** | Import steps, library list, CLI, legal note |
-| **Labels** | Edit titles, mark complete, rebuild XML |
-| **Custom crops** | Draw extra icons on the source sheet, rebuild XML |
+| **Labels** | Search or rename catalog titles, then rebuild XML |
+| **Custom crops** | Extra boxes only if the grid still missed an icon |
+
+Saved title edits persist in local `dist/labels_final.json`. To change the default names for everyone, edit `canonical_titles.json` (names only, not Splunk artwork) and re-run the pipeline.
 
 ## Outputs (local, after you build)
 
@@ -43,6 +47,9 @@ Install [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) only if you 
 On a configurable shape: **Fill** is the icon color (black in light mode, white in dark). **Line color** is an optional outline. **Edit → Edit Data** (`Ctrl+M` / `Cmd+M`) stores hostname, IP, and notes.
 
 ```bash
+uv run python run_pipeline.py crops    # re-detect icons on the sheet
+uv run python run_pipeline.py ocr      # optional; only needed for uncatalogued icons
+uv run python run_pipeline.py labels   # apply catalog / saved titles
 uv run python run_pipeline.py build    # libraries from existing local dist/ data
 ```
 

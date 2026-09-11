@@ -27,10 +27,10 @@
       <p>One local app, three stages:</p>
       <ol>
         <li><strong>Tutorial</strong> — this page.</li>
-        <li><a href="#labels">Labels</a> — search and fix icon titles, then rebuild libraries.</li>
-        <li><a href="#crops">Custom crops</a> — draw a box on the source sheet for icons the grid missed.</li>
+        <li><a href="#labels">Labels</a> — search or rename catalog titles, then rebuild. The August 2018 sheet is already named.</li>
+        <li><a href="#crops">Custom crops</a> — optional extra boxes only if the grid still missed an icon (Form Inputs and Panels are auto-detected).</li>
       </ol>
-      <p>OCR and full rebuilds still run from the CLI (below). You do not need Jupyter.</p>
+      <p>Build libraries from the CLI. This workbench is for optional edits. You do not need Jupyter or Tesseract.</p>
 
       <h2>Status</h2>
       <ul class="status-list" id="env-status"><li>Checking…</li></ul>
@@ -73,16 +73,17 @@
       <h2>Setup (rebuild from source)</h2>
       <p>Python 3.10+ and <a href="https://docs.astral.sh/uv/">uv</a>, then from the repo root:</p>
       <pre><code>uv sync
-uv run python app.py         # this workbench → http://127.0.0.1:8765</code></pre>
-      <p>Install <a href="https://github.com/tesseract-ocr/tesseract">Tesseract OCR</a> only if you re-run OCR. Download Splunk’s sheet from <a href="https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment">Draw a diagram of your deployment</a> and save it as <code>source/Splunk_Documentation_Icons_August2018.png</code> (gitignored). Then run <code>uv run python run_pipeline.py all</code> so local <code>dist/</code> libraries exist.</p>
+uv run python run_pipeline.py all    # crops → titles → libraries
+uv run python app.py                 # this workbench → http://127.0.0.1:8765</code></pre>
+      <p>Download Splunk’s sheet from <a href="https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment">Draw a diagram of your deployment</a> and save it as <code>source/Splunk_Documentation_Icons_August2018.png</code> (gitignored) before the pipeline run. Titles come from <code>canonical_titles.json</code> by grid position. OCR runs only for icons that file does not name.</p>
 
       <h2>CLI pipeline</h2>
-      <pre><code>uv run python run_pipeline.py all      # crops → OCR → labels → libraries
+      <pre><code>uv run python run_pipeline.py all      # crops → titles → libraries (OCR if needed)
 uv run python run_pipeline.py crops
 uv run python run_pipeline.py ocr
 uv run python run_pipeline.py labels
 uv run python run_pipeline.py build    # same as Rebuild in Labels / Custom crops</code></pre>
-      <p>After you save titles or custom crops here, click <strong>Rebuild XML</strong> so <code>dist/Splunk-Icons-*.xml</code> updates.</p>
+      <p>After you save titles or extra crops here, click <strong>Rebuild XML</strong> so <code>dist/Splunk-Icons-*.xml</code> updates. You do not need custom crops for the stock August 2018 sheet.</p>
 
       <h2>Legal</h2>
       <p>The icon sheet and anything derived from it (crops, PNGs, SVGs, stencils, libraries) are Splunk copyrighted material. Splunk’s docs offer the PNG so you can diagram a Splunk deployment. Their <a href="https://www.splunk.com/en_us/legal/terms/terms-of-use.html">website terms</a> do not grant a license to republish or distribute the artwork. Do not commit <code>source/*.png</code> or <code>dist/</code>.</p>
@@ -106,7 +107,7 @@ uv run python run_pipeline.py build    # same as Rebuild in Labels / Custom crop
 
   <section class="stage" data-stage="crops" id="stage-crops">
     <div class="toolbar">
-      <span class="hint">Full resolution · drag to select · scroll to pan</span>
+      <span class="hint">Full resolution · drag to select · scroll to pan. Use only for icons the pipeline missed.</span>
       <input id="cropTitle" placeholder="Title (optional)" style="min-width:160px">
       <button class="primary" id="saveCrop" type="button" disabled>Save crop</button>
       <button id="rebuildCrops" type="button">Rebuild XML</button>

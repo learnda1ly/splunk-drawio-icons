@@ -16,7 +16,6 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps, ImageFilter
-import pytesseract
 from scipy import ndimage
 
 from icon_stencil import stencil_preview_svg, svg_to_stencil
@@ -35,18 +34,100 @@ CROPS_DIR.mkdir(exist_ok=True)
 CUSTOM_CROPS_DIR = DIST_DIR / 'custom_crops'
 CUSTOM_MANIFEST = DIST_DIR / 'custom_crops.json'
 CUSTOM_CROPS_DIR.mkdir(exist_ok=True)
+TITLES_PATH = ROOT / 'canonical_titles.json'
+CUSTOM_OVERLAP_IOU = 0.35
 
-# Single-icon SVG experiment (added to color library with a distinct sidebar title).
-SVG_PROTOTYPE_CROP = 'icon_072.png'
-SVG_PROTOTYPE_TITLE = 'Indexer — SVG prototype (icon_072)'
+# Extra color-library sample: full-color trace of the Indexer stencil (title, not file id).
+SVG_PROTOTYPE_MATCH = 'Indexer'
+SVG_PROTOTYPE_TITLE = 'Indexer — SVG prototype'
+
+_CANONICAL_ROWS: list[list[str]] | None = None
+
+
+def canonical_title_rows() -> list[list[str]]:
+    """Sheet titles by row, left to right (committed names, not artwork)."""
+    global _CANONICAL_ROWS
+    if _CANONICAL_ROWS is None:
+        if TITLES_PATH.is_file():
+            data = json.loads(TITLES_PATH.read_text())
+            _CANONICAL_ROWS = [list(r) for r in data.get('rows') or []]
+        else:
+            _CANONICAL_ROWS = []
+    return _CANONICAL_ROWS
+
+
+def catalog_title(row: int, col: int) -> str | None:
+    rows = canonical_title_rows()
+    if 0 <= row < len(rows) and 0 <= col < len(rows[row]):
+        title = str(rows[row][col]).strip()
+        return title or None
+    return None
+
+
+def known_titles() -> list[str]:
+    seen: list[str] = []
+    for row in canonical_title_rows():
+        for title in row:
+            text = str(title).strip()
+            if text and text not in seen:
+                seen.append(text)
+    return seen
+
+
+def catalog_covers(manifest: list[dict]) -> bool:
+    return bool(manifest) and all(
+        catalog_title(item['icon_row'], item['col']) for item in manifest
+    )
+
+
+def assign_row_cols(boxes: list[dict]) -> None:
+    counts: dict[int, int] = defaultdict(int)
+    for box in boxes:
+        row = box['icon_row']
+        box['col'] = counts[row]
+        counts[row] += 1
+
+
+def _rect(item: dict) -> tuple[int, int, int, int] | None:
+    if all(k in item for k in ('x0', 'y0', 'x1', 'y1')):
+        return item['x0'], item['y0'], item['x1'], item['y1']
+    if all(k in item for k in ('x', 'y', 'w', 'h')):
+        return item['x'], item['y'], item['x'] + item['w'], item['y'] + item['h']
+    return None
+
+
+def _rect_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    inter = max(0, ix1 - ix0) * max(0, iy1 - iy0)
+    area_a = max(0, ax1 - ax0) * max(0, ay1 - ay0)
+    area_b = max(0, bx1 - bx0) * max(0, by1 - by0)
+    union = area_a + area_b - inter
+    return inter / union if union else 0.0
+
+
+def custom_crop_overlaps_auto(entry: dict, auto_items: list[dict]) -> bool:
+    crect = _rect(entry)
+    if not crect:
+        return False
+    for item in auto_items:
+        arect = _rect(item)
+        if arect and _rect_iou(crect, arect) >= CUSTOM_OVERLAP_IOU:
+            return True
+    return False
 
 
 def labels_for_build(labels_final: list[dict]) -> list[dict]:
-    """Merge hand-picked custom crops (custom_crops.json) into library build list."""
+    """Merge hand-picked custom crops that are not already auto-detected."""
     items = list(labels_final)
     if not CUSTOM_MANIFEST.is_file():
         return items
     for i, entry in enumerate(json.loads(CUSTOM_MANIFEST.read_text())):
+        if custom_crop_overlaps_auto(entry, items):
+            log.info('Skipping custom crop %s (overlaps auto-detected icon)', entry.get('title') or entry['file'])
+            continue
         crop_path = CUSTOM_CROPS_DIR / entry['file']
         if not crop_path.is_file():
             log.warning('Skipping missing custom crop: %s', entry['file'])
@@ -71,6 +152,20 @@ DIRECT_PNG_URL = ''  # optional: direct URL or JWT-backed CDN link to the PNG
 
 
 
+_OCR_READER = None
+
+
+def ocr_reader():
+    """Lazy EasyOCR reader (English). Created once per process."""
+    global _OCR_READER
+    if _OCR_READER is None:
+        import easyocr
+
+        log.info('Loading EasyOCR English model (first run may download weights)…')
+        _OCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
+    return _OCR_READER
+
+
 def ocr_label_band(img: Image.Image, box: dict, pad_x: int = 12, scale: int = 4) -> str:
     """OCR label text below an icon (alpha-only); supports one- or two-line labels."""
     bounds = box.get('label_bounds')
@@ -92,15 +187,9 @@ def ocr_label_band(img: Image.Image, box: dict, pad_x: int = 12, scale: int = 4)
     min_h = max(48, label_h * scale)
     proc = proc.resize((proc.width * scale, max(proc.height * scale, min_h)), Image.LANCZOS)
     proc = proc.filter(ImageFilter.MedianFilter(3))
-    configs = ('--psm 6 -c preserve_interword_spaces=1', '--psm 7 -c preserve_interword_spaces=1') if label_h > 52 else (
-        '--psm 7 -c preserve_interword_spaces=1', '--psm 6 -c preserve_interword_spaces=1')
-    best = ''
-    for cfg in configs:
-        text = pytesseract.image_to_string(proc, config=cfg).strip()
-        text = re.sub(r'\s+', ' ', text)
-        if len(text) > len(best):
-            best = text
-    return best
+    rgb = np.array(proc.convert('RGB'))
+    lines = ocr_reader().readtext(rgb, detail=0, paragraph=True)
+    return re.sub(r'\s+', ' ', ' '.join(str(t) for t in lines)).strip()
 
 
 
@@ -366,6 +455,7 @@ log = logging.getLogger('pipeline')
 SCAN_SCALE = 4
 CROP_PAD = 10
 ICON_ROW_TOP_PAD = 80  # icons may extend above the shared row band
+ICON_ROW_MERGE_GAP = 40  # attach a short chrome/header band just above an icon row
 LABEL_SEARCH_DEPTH = 220
 LABEL_LINE_MIN_H = 8
 LABEL_LINE_GAP = 14
@@ -377,7 +467,7 @@ ICON_ROW_MIN_H = 200
 LABEL_ROW_MAX_H = 150
 LABEL_ROW_MIN_H = 25
 ICON_Y_MIN = 400
-ICON_Y_MAX = 14000
+ICON_Y_MAX = 19000  # include Form Inputs / Panels rows; connectors start ~20500
 CONNECTOR_REGION_Y_MIN = 20500
 LABEL_GAP_MAX = 200
 
@@ -711,9 +801,20 @@ def detect_boxes(img: Image.Image) -> list[dict]:
 
     row_bands = scan_row_bands(small.sum(axis=1))
     icon_rows = [
-        b for b in row_bands
+        dict(b) for b in row_bands
         if b['h'] >= ICON_ROW_MIN_H and ICON_Y_MIN <= b['y0'] < ICON_Y_MAX
     ]
+    for icon_row in icon_rows:
+        changed = True
+        while changed:
+            changed = False
+            for band in row_bands:
+                if band['y1'] <= icon_row['y0'] and icon_row['y0'] - band['y1'] <= ICON_ROW_MERGE_GAP:
+                    new_y0 = min(icon_row['y0'], band['y0'])
+                    if new_y0 < icon_row['y0']:
+                        icon_row['y0'] = new_y0
+                        icon_row['h'] = icon_row['y1'] - icon_row['y0']
+                        changed = True
     log.info('Found %d row bands, %d icon rows (h>=%d, y=%d–%d)',
              len(row_bands), len(icon_rows), ICON_ROW_MIN_H, ICON_Y_MIN, ICON_Y_MAX)
 
@@ -742,7 +843,8 @@ def detect_boxes(img: Image.Image) -> list[dict]:
                 entry['label_bounds'] = label_bounds
             boxes.append(entry)
 
-    boxes.sort(key=lambda b: (b['y'], b['x']))
+    boxes.sort(key=lambda b: (b['icon_row'], b['x']))
+    assign_row_cols(boxes)
     log.info('Detected %d icons in %.1fs', len(boxes), time.perf_counter() - t0)
     return boxes
 
@@ -770,6 +872,7 @@ def step_crops(sheet: Image.Image) -> tuple[list[dict], list[dict]]:
             'w': box['w'],
             'h': box['h'],
             'icon_row': box['icon_row'],
+            'col': box['col'],
             'cell': box['cell'],
             'label_bounds': box.get('label_bounds'),
             'dominant_color': color_info['dominant_color'],
@@ -814,33 +917,8 @@ def run_ocr_pass(sheet: Image.Image, manifest: list[dict]) -> list[dict]:
     return ocr_results
 
 
-KNOWN_TITLES = [
-    'Alert', 'Add-on', 'App', 'Application', 'Base', 'Bucket', 'Cluster', 'Cloud',
-    'Configuration', 'Custom Visualization', 'Data Model', 'Data Model Object', 'Data Packet',
-    'Database', 'Datastore', 'Datastores', 'Deployer', 'Deployment', 'Deployment Server',
-    'Desktop', 'Dimension', 'Directories', 'Directory', 'Directory Inputs',
-    'Document', 'Documents', 'Distributed Management', 'ES Server', 'Event Handler',
-    'Event Types', 'External Nodes', 'Fields', 'File Input', 'File Inputs', 'Firewall',
-    'Forwarder', 'Forwarders', 'Heavy Forwarder', 'Universal Forwarder', 'Light Forwarder',
-    'Intermediate Forwarder', 'Indexer', 'Indexers', 'Indexer Cluster',
-    'Indexer Cluster Master', 'Indexer Cluster Peer', 'KV Store', 'KV Store Captain',
-    'Knowledge Object', 'Laptop', 'License', 'License Master', 'License Server',
-    'Load Balancer', 'Load File', 'Lookup', 'Lookup Dataset', 'Metric Index',
-    'Monitoring Console', 'Network Input', 'Parsing Queue', 'Panels HTML',
-    'People', 'Person', 'Pipeline', 'Pool', 'Queue', 'Report', 'Reports', 'Router',
-    'SDK', 'Saved Search', 'Scheduled Report', 'Script', 'Scripted Input', 'Search',
-    'Search Head', 'Search Heads', 'Search Head Cluster', 'Search Head Cluster Captain',
-    'Search Head Cluster Deployer', 'Search Head Cluster Member', 'Search Head Cluster',
-    'Settings', 'Simple XML', 'Splunk App', 'Splunk Cloud', 'Splunk Enterprise',
-    'Splunk Enterprise Security', 'Splunk Instance', 'Splunk IT Service Intelligence',
-    'ITSI Server', 'Summaries', 'Summary', 'System', 'Systems', 'Table Dataset', 'Tag',
-    'Third Party App', 'Time', 'UBA Server', 'User', 'Users', 'Value', 'Virtual Index',
-    'Web Interface', 'Behavior Analytics', 'Master Cluster', 'Search Pool',
-    'JS', 'HTML', 'CSS',
-]
-
 KEEP_BARE = {'js', 'html', 'css', 'sdk'}
-KEEP_SUBSTRINGS = ('custom visualization', 'simple xml', 'panels html')
+KEEP_SUBSTRINGS = ('custom visualization', 'simple xml', 'panels html', 'form inputs')
 
 OCR_FIXES = [
     (r'\byeployment\b', 'deployment'),
@@ -859,7 +937,6 @@ OCR_FIXES = [
     (r'\beventilypes\b', 'event types'),
     (r'\bsearch heac\b', 'search head'),
     (r'\bsplunk instan\b', 'splunk instance'),
-    (r'\bdatastores\b', 'datastore'),
 ]
 
 
@@ -890,14 +967,15 @@ def fuzzy_title(raw: str, cutoff: float = 0.52) -> str | None:
     cleaned = clean_ocr(raw)
     if not cleaned or len(cleaned) < 2:
         return None
-    known_clean = [clean_ocr(t) for t in KNOWN_TITLES]
-    for title, kc in zip(KNOWN_TITLES, known_clean):
+    titles = known_titles()
+    known_clean = [clean_ocr(t) for t in titles]
+    for title, kc in zip(titles, known_clean):
         if kc == cleaned:
             return title
     matches = difflib.get_close_matches(cleaned, known_clean, n=1, cutoff=cutoff)
     if matches:
-        return KNOWN_TITLES[known_clean.index(matches[0])]
-    for title, kc in sorted(zip(KNOWN_TITLES, known_clean), key=lambda x: -len(x[0])):
+        return titles[known_clean.index(matches[0])]
+    for title, kc in sorted(zip(titles, known_clean), key=lambda x: -len(x[0])):
         if len(kc) >= 5 and (kc in cleaned or cleaned in kc):
             return title
     if len(cleaned) >= 3 and not is_bare_letter(cleaned):
@@ -905,25 +983,84 @@ def fuzzy_title(raw: str, cutoff: float = 0.52) -> str | None:
     return None
 
 
-def step_labels(ocr_results: list[dict], manifest: list[dict]) -> list[dict]:
-    """Fuzzy-match OCR text to titles; write labels_final.json."""
+def _ocr_by_id(ocr_results: list[dict]) -> dict[int, str]:
+    return {int(entry['id']): (entry.get('raw_ocr') or '') for entry in ocr_results}
+
+
+def _previous_labels_by_cell() -> dict[tuple[int, int], dict]:
+    path = DIST_DIR / 'labels_final.json'
+    if not path.is_file():
+        return {}
+    out: dict[tuple[int, int], dict] = {}
+    for row in json.loads(path.read_text()):
+        if row.get('custom'):
+            continue
+        r, c = row.get('icon_row'), row.get('col')
+        if isinstance(r, int) and isinstance(c, int):
+            out[(r, c)] = row
+    return out
+
+
+def _placeholder_title(icon_id: int) -> str:
+    return f'Splunk Icon {icon_id + 1:03d}'
+
+
+def step_labels(ocr_results: list[dict] | None, manifest: list[dict]) -> list[dict]:
+    """Assign titles from the catalog (by row/col), saved edits, then OCR fallback."""
+    ocr_map = _ocr_by_id(ocr_results or [])
+    previous = _previous_labels_by_cell()
+    if any('col' not in item for item in manifest):
+        assign_row_cols(sorted(manifest, key=lambda item: (item.get('icon_row', 0), item.get('x', 0))))
     labels_final = []
     labels_dropped = []
+    n_catalog = n_saved = n_ocr = n_placeholder = 0
 
-    for entry in ocr_results:
-        raw = entry['raw_ocr']
+    for meta in manifest:
+        row, col = meta['icon_row'], meta['col']
+        raw = ocr_map.get(meta['id'], '')
         if raw and is_bare_letter(raw):
-            labels_dropped.append({**entry, 'reason': 'bare_letter'})
-            continue
-        title = fuzzy_title(raw) if raw else None
+            labels_dropped.append({'id': meta['id'], 'raw_ocr': raw, 'reason': 'bare_letter'})
+            raw = ''
+        title = None
+        source = 'placeholder'
+        complete = False
+        saved = previous.get((row, col))
+        if saved:
+            saved_title = (saved.get('title') or '').strip()
+            if saved_title and not saved_title.startswith('Splunk Icon'):
+                title = saved_title
+                complete = bool(saved.get('complete'))
+                source = saved.get('source') or 'user'
+                n_saved += 1
         if title is None:
-            title = f"Splunk Icon {entry['id'] + 1:03d}"
-        meta = manifest[entry['id']]
+            cat = catalog_title(row, col)
+            if cat:
+                title = cat
+                complete = True
+                source = 'catalog'
+                n_catalog += 1
+        if title is None:
+            title = fuzzy_title(raw) if raw else None
+            if title:
+                source = 'ocr'
+                n_ocr += 1
+            else:
+                title = _placeholder_title(meta['id'])
+                source = 'placeholder'
+                n_placeholder += 1
         labels_final.append({
-            'id': entry['id'],
+            'id': meta['id'],
             'raw_ocr': raw,
             'title': title,
             'file': meta['file'],
+            'icon_row': row,
+            'col': col,
+            'x': meta['x'],
+            'y': meta['y'],
+            'w': meta['w'],
+            'h': meta['h'],
+            'source': source,
+            'complete': complete,
             'dominant_color': meta.get('dominant_color'),
             'color_name': meta.get('color_name'),
             'palette': meta.get('palette'),
@@ -931,8 +1068,10 @@ def step_labels(ocr_results: list[dict], manifest: list[dict]) -> list[dict]:
 
     (DIST_DIR / 'labels_final.json').write_text(json.dumps(labels_final, indent=2))
     (DIST_DIR / 'labels_dropped.json').write_text(json.dumps(labels_dropped, indent=2))
-    named = sum(1 for x in labels_final if not x['title'].startswith('Splunk Icon'))
-    log.info('Label filter: kept %d (%d OCR-named), dropped %d', len(labels_final), named, len(labels_dropped))
+    log.info(
+        'Titles: %d catalog, %d saved, %d OCR, %d placeholder (%d total)',
+        n_catalog, n_saved, n_ocr, n_placeholder, len(labels_final),
+    )
     return labels_final
 
 
@@ -986,7 +1125,7 @@ def step_build(labels_final: list[dict], connectors: list[dict]) -> None:
         svg_trace = vectorize_crop(crop, mode='adaptive', width=w, height=h)
         configurable_shapes.append(configurable_entry(item['title'], w, h, svg_trace))
 
-        if item['file'] == SVG_PROTOTYPE_CROP:
+        if item.get('title') == SVG_PROTOTYPE_MATCH and not item.get('custom'):
             svg_color = vectorize_crop(crop, mode='color', width=w, height=h)
             proto_dir = DIST_DIR / 'prototypes'
             proto_dir.mkdir(exist_ok=True)
@@ -1067,7 +1206,18 @@ def step_build(labels_final: list[dict], connectors: list[dict]) -> None:
 def run_all() -> None:
     sheet = load_sheet()
     manifest, connectors = step_crops(sheet)
-    ocr_results = run_ocr_pass(sheet, manifest)
+    ocr_path = DIST_DIR / 'labels_ocr.json'
+    if catalog_covers(manifest):
+        log.info('Canonical titles cover all %d icons; skipping OCR', len(manifest))
+        if ocr_path.is_file():
+            cached = json.loads(ocr_path.read_text())
+            ocr_results = cached if len(cached) == len(manifest) else []
+        else:
+            ocr_results = []
+    else:
+        missing = sum(1 for item in manifest if not catalog_title(item['icon_row'], item['col']))
+        log.info('OCR for %d icons not in %s', missing, TITLES_PATH.name)
+        ocr_results = run_ocr_pass(sheet, manifest)
     labels_final = step_labels(ocr_results, manifest)
     step_build(labels_final, connectors)
 
@@ -1107,7 +1257,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.step == 'labels':
         manifest = _load_json(DIST_DIR / 'manifest.json')
-        ocr_results = _load_json(DIST_DIR / 'labels_ocr.json')
+        ocr_path = DIST_DIR / 'labels_ocr.json'
+        ocr_results = json.loads(ocr_path.read_text()) if ocr_path.is_file() else []
         step_labels(ocr_results, manifest)
         return 0
 

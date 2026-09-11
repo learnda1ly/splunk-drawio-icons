@@ -39,7 +39,28 @@ def load_all_labels() -> list[dict]:
     labels = json.loads(LABELS.read_text()) if LABELS.is_file() else []
     if not CUSTOM.is_file():
         return labels
+
+    def rect(item: dict):
+        if all(k in item for k in ('x0', 'y0', 'x1', 'y1')):
+            return item['x0'], item['y0'], item['x1'], item['y1']
+        if all(k in item for k in ('x', 'y', 'w', 'h')):
+            return item['x'], item['y'], item['x'] + item['w'], item['y'] + item['h']
+        return None
+
+    def iou(a, b) -> float:
+        ax0, ay0, ax1, ay1 = a
+        bx0, by0, bx1, by1 = b
+        ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+        ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+        inter = max(0, ix1 - ix0) * max(0, iy1 - iy0)
+        union = max(0, ax1 - ax0) * max(0, ay1 - ay0) + max(0, bx1 - bx0) * max(0, by1 - by0) - inter
+        return inter / union if union else 0.0
+
+    auto_rects = [r for r in (rect(x) for x in labels) if r]
     for entry in json.loads(CUSTOM.read_text()):
+        crect = rect(entry)
+        if crect and any(iou(crect, a) >= 0.35 for a in auto_rects):
+            continue
         labels.append({
             'id': f"custom_{entry.get('id', entry['file'])}",
             'custom_id': entry.get('id'),
@@ -105,6 +126,7 @@ def rebuild_libraries() -> None:
 def api_status() -> dict:
     return {
         'source': SOURCE.is_file(),
+        'catalog': (ROOT / 'canonical_titles.json').is_file(),
         'labels': LABELS.is_file(),
         'custom_crops': CUSTOM.is_file(),
         'libraries': {name: (DIST / name).is_file() for name in LIBRARIES},

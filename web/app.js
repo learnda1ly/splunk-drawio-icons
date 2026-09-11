@@ -23,9 +23,12 @@
       const s = await fetch('/api/status').then((r) => r.json());
       const rows = [
         ['Source PNG', s.source, 'source/Splunk_Documentation_Icons_August2018.png'],
+        ['Title catalog', s.catalog, 'canonical_titles.json'],
         ['Labels', s.labels, 'dist/labels_final.json'],
-        ['Custom crops', s.custom_crops, 'dist/custom_crops.json'],
       ];
+      if (s.custom_crops) {
+        rows.push(['Custom crops (extra)', true, 'dist/custom_crops.json']);
+      }
       for (const [name, ok] of Object.entries(s.libraries || {})) {
         rows.push([name, ok, `dist/${name}`]);
       }
@@ -102,7 +105,13 @@
         : '<button type="button" class="done-btn" title="Mark complete">✓ Done</button>';
       const imgBase = row.custom ? '/custom/' : '/crops/';
       const label = row.custom ? row.file : `#${Number(row.id) + 1} ${row.file}`;
-      const sub = row.custom ? 'Custom crop' : 'OCR: ' + esc(row.raw_ocr || '—');
+      const sub = row.custom
+        ? 'Custom crop'
+        : row.source === 'catalog'
+          ? 'Catalog title'
+          : row.source === 'user'
+            ? 'Saved title'
+            : 'OCR: ' + esc(row.raw_ocr || '—');
       el.innerHTML = `<img src="${imgBase}${row.file}" alt="">
         <div style="flex:1;min-width:0">
           <div class="id"><span>${label}</span>${btn}</div>
@@ -134,7 +143,10 @@
     labelsLoaded = true;
     labelEmpty.hidden = labels.length > 0;
     if (!labels.length) {
-      labelEmpty.textContent = 'No labels yet. Run uv run python run_pipeline.py all from the repo root, then reload.';
+      labelEmpty.textContent = 'No labels yet. From the repo root run: uv run python run_pipeline.py all — then reload. Titles come from canonical_titles.json.';
+    }
+    if (labels.length && labels.every((row) => row.complete)) {
+      showDone.checked = true;
     }
     renderLabels();
   }
@@ -225,6 +237,11 @@
     const items = await fetch('/api/crops').then((r) => r.json());
     const el = document.getElementById('list');
     el.innerHTML = '';
+    if (!items.length) {
+      el.innerHTML =
+        '<p class="empty" style="padding:8px 0">None saved. Form Inputs and Panels on the August 2018 sheet are auto-detected — add a crop only for something the grid missed.</p>';
+      return;
+    }
     for (const c of items.slice().reverse()) {
       const d = document.createElement('div');
       d.className = 'crop-item';
