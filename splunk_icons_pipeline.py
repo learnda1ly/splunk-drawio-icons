@@ -2,6 +2,7 @@
 
 import base64
 import difflib
+import html
 import io
 import hashlib
 import json
@@ -9,7 +10,9 @@ import re
 import logging
 import time
 from collections import defaultdict
+import urllib.error
 import urllib.parse
+import urllib.request
 import xml.sax.saxutils as xml_utils
 import zlib
 from pathlib import Path
@@ -18,7 +21,7 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from scipy import ndimage
 
-from icon_stencil import stencil_preview_svg, svg_to_stencil
+from icon_stencil import svg_to_stencil
 from icon_vector import vectorize_crop
 
 Image.MAX_IMAGE_PIXELS = None
@@ -31,28 +34,63 @@ SOURCE_DIR.mkdir(exist_ok=True)
 DIST_DIR.mkdir(exist_ok=True)
 CROPS_DIR.mkdir(exist_ok=True)
 
+SHEET = SOURCE_DIR / 'Splunk_Documentation_Icons_August2018.png'
+DEFAULT_SHEET_DOCS_URL = (
+    'https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/'
+    '10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment'
+)
+# Splunk docs return 403 without a browser-like User-Agent.
+HTTP_USER_AGENT = (
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+)
+SHEET_HREF_RE = re.compile(
+    r'''href=["']([^"']*Splunk_Documentation_Icons_August2018\.png[^"']*)["']''',
+    re.I,
+)
+PNG_MAGIC = b'\x89PNG\r\n\x1a\n'
+
+
+class SheetDownloadError(RuntimeError):
+    """Splunk docs page or PNG URL could not be fetched."""
+
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+log = logging.getLogger('pipeline')
+
 CUSTOM_CROPS_DIR = DIST_DIR / 'custom_crops'
 CUSTOM_MANIFEST = DIST_DIR / 'custom_crops.json'
 CUSTOM_CROPS_DIR.mkdir(exist_ok=True)
 TITLES_PATH = ROOT / 'canonical_titles.json'
 CUSTOM_OVERLAP_IOU = 0.35
+OCR_INSTALL_HINT = 'OCR is optional. Install with: uv sync --extra ocr'
 
-# Extra color-library sample: full-color trace of the Indexer stencil (title, not file id).
-SVG_PROTOTYPE_MATCH = 'Indexer'
-SVG_PROTOTYPE_TITLE = 'Indexer — SVG prototype'
-
+_CANONICAL_DOC: dict | None = None
 _CANONICAL_ROWS: list[list[str]] | None = None
+
+
+def catalog_document() -> dict:
+    """Load canonical_titles.json (may be empty)."""
+    global _CANONICAL_DOC
+    if _CANONICAL_DOC is None:
+        if TITLES_PATH.is_file():
+            _CANONICAL_DOC = json.loads(TITLES_PATH.read_text())
+        else:
+            _CANONICAL_DOC = {}
+    return _CANONICAL_DOC
+
+
+def invalidate_catalog_cache() -> None:
+    global _CANONICAL_DOC, _CANONICAL_ROWS
+    _CANONICAL_DOC = None
+    _CANONICAL_ROWS = None
 
 
 def canonical_title_rows() -> list[list[str]]:
     """Sheet titles by row, left to right (committed names, not artwork)."""
     global _CANONICAL_ROWS
     if _CANONICAL_ROWS is None:
-        if TITLES_PATH.is_file():
-            data = json.loads(TITLES_PATH.read_text())
-            _CANONICAL_ROWS = [list(r) for r in data.get('rows') or []]
-        else:
-            _CANONICAL_ROWS = []
+        _CANONICAL_ROWS = [list(r) for r in catalog_document().get('rows') or []]
     return _CANONICAL_ROWS
 
 
@@ -78,6 +116,195 @@ def catalog_covers(manifest: list[dict]) -> bool:
     return bool(manifest) and all(
         catalog_title(item['icon_row'], item['col']) for item in manifest
     )
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sheet_docs_url() -> str:
+    meta = catalog_document().get('sheet')
+    if isinstance(meta, dict):
+        url = str(meta.get('docs_url') or '').strip()
+        if url:
+            return url
+    return DEFAULT_SHEET_DOCS_URL
+
+
+def sheet_moved_message(detail: str) -> str:
+    return (
+        f'{detail.rstrip()}\n'
+        f'Splunk may have moved the icon sheet. Open:\n'
+        f'  {sheet_docs_url()}\n'
+        'and save the Transparent PNG as:\n'
+        f'  {SHEET}'
+    )
+
+
+def find_sheet_png_url(page_html: str, page_url: str = '') -> str | None:
+    """Return the Transparent PNG href from a Splunk docs HTML page, or None."""
+    match = SHEET_HREF_RE.search(page_html)
+    if not match:
+        return None
+    href = html.unescape(match.group(1))
+    return urllib.parse.urljoin(page_url or sheet_docs_url(), href)
+
+
+def _http_get(url: str, timeout: float) -> tuple[bytes, str]:
+    req = urllib.request.Request(
+        url,
+        headers={'User-Agent': HTTP_USER_AGENT, 'Accept': '*/*'},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        ctype = resp.headers.get('Content-Type') or ''
+        return resp.read(), ctype
+
+
+def download_sheet(*, force: bool = False) -> Path:
+    """Fetch the August 2018 PNG from Splunk docs into source/.
+
+    The docs page is the stable location; the PNG href itself is a short-lived
+    CDN link. If Splunk moves the page or the file, raise SheetDownloadError.
+    """
+    if SHEET.is_file() and not force:
+        return SHEET
+    SOURCE_DIR.mkdir(exist_ok=True)
+    docs = sheet_docs_url()
+    try:
+        page, _ctype = _http_get(docs, timeout=30)
+    except urllib.error.HTTPError as exc:
+        raise SheetDownloadError(sheet_moved_message(
+            f'Could not open Splunk docs (HTTP {exc.code}).'
+        )) from exc
+    except urllib.error.URLError as exc:
+        raise SheetDownloadError(sheet_moved_message(
+            f'Could not open Splunk docs ({exc.reason}).'
+        )) from exc
+    png_url = find_sheet_png_url(page.decode('utf-8', errors='replace'), docs)
+    if not png_url:
+        raise SheetDownloadError(sheet_moved_message(
+            'Could not find a Transparent PNG link on the Splunk docs page.'
+        ))
+    log.info('Downloading icon sheet from Splunk docs…')
+    try:
+        data, ctype = _http_get(png_url, timeout=120)
+    except urllib.error.HTTPError as exc:
+        raise SheetDownloadError(sheet_moved_message(
+            f'PNG download failed (HTTP {exc.code}).'
+        )) from exc
+    except urllib.error.URLError as exc:
+        raise SheetDownloadError(sheet_moved_message(
+            f'PNG download failed ({exc.reason}).'
+        )) from exc
+    if not data.startswith(PNG_MAGIC) or 'html' in ctype.lower():
+        raise SheetDownloadError(sheet_moved_message(
+            'The download link did not return a PNG.'
+        ))
+    tmp = SHEET.with_suffix('.png.part')
+    tmp.write_bytes(data)
+    try:
+        with Image.open(tmp) as img:
+            sheet = img.convert('RGBA')
+            verify_sheet(sheet, tmp)
+    except ValueError as exc:
+        tmp.unlink(missing_ok=True)
+        raise SheetDownloadError(sheet_moved_message(str(exc))) from exc
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        raise SheetDownloadError(sheet_moved_message(
+            f'Downloaded file is not a readable PNG ({exc}).'
+        )) from exc
+    tmp.replace(SHEET)
+    log.info('Saved %s (%d bytes)', SHEET, len(data))
+    return SHEET
+
+
+def verify_sheet(sheet: Image.Image, path: Path | None = None) -> None:
+    """Refuse a PNG that does not match the catalog's August 2018 sheet fingerprint."""
+    meta = catalog_document().get('sheet')
+    if not isinstance(meta, dict):
+        return
+    width, height = meta.get('width'), meta.get('height')
+    if width and height and sheet.size != (int(width), int(height)):
+        raise ValueError(
+            f'Source PNG is {sheet.size[0]}×{sheet.size[1]}, but canonical_titles.json '
+            f'was built for {width}×{height} ({meta.get("file", "the August 2018 sheet")}). '
+            'Download that sheet from Splunk docs — a newer or different PNG will attach the wrong names.'
+        )
+    expected = meta.get('sha256')
+    if expected and path and path.is_file():
+        digest = sha256_file(path)
+        if digest.lower() != str(expected).lower():
+            raise ValueError(
+                f'Source PNG sha256 {digest[:16]}… does not match catalog {str(expected)[:16]}…. '
+                'This file is not the sheet the titles were written for.'
+            )
+
+
+def write_canonical_from_labels(labels: list[dict]) -> dict:
+    """Write workbench titles back to canonical_titles.json by grid position."""
+    doc = dict(catalog_document())
+    old_rows = [list(r) for r in doc.get('rows') or []]
+    updates: dict[tuple[int, int], str] = {}
+    for item in labels:
+        if item.get('custom'):
+            continue
+        row, col = item.get('icon_row'), item.get('col')
+        title = (item.get('title') or '').strip()
+        if isinstance(row, int) and isinstance(col, int) and title:
+            updates[(row, col)] = title
+    if not updates:
+        raise ValueError('No grid titles to write — run the pipeline so labels have icon_row and col.')
+    max_row = max(max(r for r, _ in updates), len(old_rows) - 1)
+    rows: list[list[str]] = []
+    for r in range(max_row + 1):
+        old = old_rows[r] if r < len(old_rows) else []
+        cols = [c for rr, c in updates if rr == r]
+        max_col = max(cols + [len(old) - 1])
+        row = []
+        for c in range(max_col + 1):
+            if (r, c) in updates:
+                row.append(updates[(r, c)])
+            elif c < len(old):
+                row.append(old[c])
+            else:
+                row.append('')
+        rows.append(row)
+    if isinstance(doc.get('sheet'), str):
+        doc['sheet'] = {'file': doc['sheet']}
+    doc['rows'] = rows
+    doc.setdefault(
+        'note',
+        'Icon titles by sheet row, left to right. Names only — not Splunk artwork.',
+    )
+    TITLES_PATH.write_text(json.dumps(doc, indent=2) + '\n', encoding='utf-8')
+    invalidate_catalog_cache()
+    log.info('Wrote %d titles to %s', sum(len(r) for r in rows), TITLES_PATH)
+    return catalog_document()
+
+
+def shape_tags(title: str) -> str:
+    """draw.io sidebar search tags derived from the icon title."""
+    words = re.findall(r'[a-z0-9]+', title.lower())
+    stop = {'with', 'and', 'the', 'a', 'an', 'of', 'on', 'or'}
+    tags = ['splunk']
+    if 'search' in words and 'head' in words:
+        tags.append('search-head')
+    if 'load' in words and 'balancer' in words:
+        tags.append('load-balancer')
+    if 'form' in words:
+        tags.append('form-input')
+    if 'panel' in words or 'panels' in words:
+        tags.append('panel')
+    for os_name in ('linux', 'mac', 'windows', 'solaris'):
+        if os_name in words:
+            tags.extend((os_name, 'os'))
+    tags.extend(w for w in words if w not in stop and len(w) > 1)
+    return ' '.join(dict.fromkeys(tags))
 
 
 def assign_row_cols(boxes: list[dict]) -> None:
@@ -147,11 +374,6 @@ def labels_for_build(labels_final: list[dict]) -> list[dict]:
     return items
 
 
-SHEET = SOURCE_DIR / 'Splunk_Documentation_Icons_August2018.png'
-DIRECT_PNG_URL = ''  # optional: direct URL or JWT-backed CDN link to the PNG
-
-
-
 _OCR_READER = None
 
 
@@ -159,8 +381,10 @@ def ocr_reader():
     """Lazy EasyOCR reader (English). Created once per process."""
     global _OCR_READER
     if _OCR_READER is None:
-        import easyocr
-
+        try:
+            import easyocr
+        except ImportError as exc:
+            raise ImportError(OCR_INSTALL_HINT) from exc
         log.info('Loading EasyOCR English model (first run may download weights)…')
         _OCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
     return _OCR_READER
@@ -387,6 +611,7 @@ def image_entry(
         'h': dh,
         'title': title,
         'aspect': aspect,
+        'tags': shape_tags(title),
     }
     return entry
 
@@ -421,7 +646,7 @@ def configurable_entry(title: str, w: int, h: int, svg: str) -> dict:
         'w': dw,
         'h': dh,
         'title': title,
-        'tags': f'splunk configurable {title.lower()}',
+        'tags': shape_tags(title) + ' configurable',
     }
 
 
@@ -447,9 +672,6 @@ def write_library(path: Path, shapes: list[dict]) -> None:
 
 
 
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-log = logging.getLogger('pipeline')
 
 # Detection tuning — grid icons vs connector samples at sheet bottom
 SCAN_SCALE = 4
@@ -497,29 +719,16 @@ def connector_xml(title: str, style: str, w: int = 120, h: int = 40) -> dict:
     }
 
 
-import urllib.request
-
-
 def load_sheet() -> Image.Image:
-    """Load the Splunk icon sheet from source/ or DIRECT_PNG_URL."""
-    if DIRECT_PNG_URL:
-        log.info('Fetching %s', DIRECT_PNG_URL)
-        req = urllib.request.Request(DIRECT_PNG_URL, headers={'User-Agent': 'splunk-drawio-icons/1.0'})
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            sheet_bytes = resp.read()
-        sheet = Image.open(io.BytesIO(sheet_bytes)).convert('RGBA')
-        SHEET.write_bytes(sheet_bytes)
-        log.info('Saved to %s (%d bytes)', SHEET, len(sheet_bytes))
-        return sheet
-    if SHEET.is_file():
-        t0 = time.perf_counter()
-        sheet = Image.open(SHEET).convert('RGBA')
-        log.info('Loaded %s %s in %.1fs', SHEET, sheet.size, time.perf_counter() - t0)
-        return sheet
-    raise FileNotFoundError(
-        f'Missing {SHEET}. Download Splunk_Documentation_Icons_August2018.png from Splunk docs '
-        'or set DIRECT_PNG_URL in splunk_icons_pipeline.py.'
-    )
+    """Load the Splunk icon sheet from source/, downloading it if missing."""
+    if not SHEET.is_file():
+        log.info('Source PNG missing; downloading from Splunk docs…')
+        download_sheet()
+    t0 = time.perf_counter()
+    sheet = Image.open(SHEET).convert('RGBA')
+    log.info('Loaded %s %s in %.1fs', SHEET, sheet.size, time.perf_counter() - t0)
+    verify_sheet(sheet, SHEET)
+    return sheet
 
 
 def scan_row_bands(
@@ -1025,20 +1234,24 @@ def step_labels(ocr_results: list[dict] | None, manifest: list[dict]) -> list[di
         source = 'placeholder'
         complete = False
         saved = previous.get((row, col))
-        if saved:
-            saved_title = (saved.get('title') or '').strip()
-            if saved_title and not saved_title.startswith('Splunk Icon'):
-                title = saved_title
-                complete = bool(saved.get('complete'))
-                source = saved.get('source') or 'user'
-                n_saved += 1
-        if title is None:
-            cat = catalog_title(row, col)
-            if cat:
-                title = cat
-                complete = True
-                source = 'catalog'
-                n_catalog += 1
+        saved_title = ((saved or {}).get('title') or '').strip()
+        cat = catalog_title(row, col)
+        user_locked = (
+            saved
+            and saved.get('source') == 'user'
+            and saved_title
+            and not saved_title.startswith('Splunk Icon')
+        )
+        if user_locked:
+            title = saved_title
+            complete = bool(saved.get('complete'))
+            source = 'user'
+            n_saved += 1
+        elif cat:
+            title = cat
+            complete = True
+            source = 'catalog'
+            n_catalog += 1
         if title is None:
             title = fuzzy_title(raw) if raw else None
             if title:
@@ -1125,40 +1338,6 @@ def step_build(labels_final: list[dict], connectors: list[dict]) -> None:
         svg_trace = vectorize_crop(crop, mode='adaptive', width=w, height=h)
         configurable_shapes.append(configurable_entry(item['title'], w, h, svg_trace))
 
-        if item.get('title') == SVG_PROTOTYPE_MATCH and not item.get('custom'):
-            svg_color = vectorize_crop(crop, mode='color', width=w, height=h)
-            proto_dir = DIST_DIR / 'prototypes'
-            proto_dir.mkdir(exist_ok=True)
-            (proto_dir / 'indexer_icon_072.svg').write_text(svg_color, encoding='utf-8')
-            stencil_xml = svg_to_stencil(svg_trace, name=item['title'])
-            (proto_dir / 'indexer_icon_072.stencil.xml').write_text(stencil_xml, encoding='utf-8')
-            (proto_dir / 'indexer_icon_072.stencil.svg').write_text(
-                stencil_preview_svg(stencil_xml), encoding='utf-8',
-            )
-            sample_model = decode_mx(configurable_shapes[-1]['xml'])
-            sample_model = sample_model.replace(
-                'hostname="" ip="" notes=""',
-                'hostname="idx1.example.com" ip="10.0.0.12" notes="cluster=prod"',
-            )
-            sample_model = sample_model.replace(
-                '<mxGeometry ',
-                '<mxGeometry x="80" y="40" ',
-                1,
-            )
-            (proto_dir / 'configurable-indexer.drawio').write_text(
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                '<mxfile host="app.diagrams.net">\n'
-                '<diagram name="Configurable Indexer" id="indexer">\n'
-                f'{sample_model}\n'
-                '</diagram>\n'
-                '</mxfile>\n',
-                encoding='utf-8',
-            )
-            color_shapes.append(
-                image_entry(SVG_PROTOTYPE_TITLE, w, h, svg_data_uri(svg_color)),
-            )
-            log.info('Added SVG prototype library entry: %s', SVG_PROTOTYPE_TITLE)
-
         if n == 1 or n % 50 == 0 or n == len(labeled):
             log.info('Packaged %d/%d icon shapes (%.1fs)', n, len(labeled), time.perf_counter() - t0)
 
@@ -1217,7 +1396,12 @@ def run_all() -> None:
     else:
         missing = sum(1 for item in manifest if not catalog_title(item['icon_row'], item['col']))
         log.info('OCR for %d icons not in %s', missing, TITLES_PATH.name)
-        ocr_results = run_ocr_pass(sheet, manifest)
+        try:
+            ocr_results = run_ocr_pass(sheet, manifest)
+        except ImportError as exc:
+            raise ImportError(
+                f'{missing} detected icons have no catalog title. {OCR_INSTALL_HINT}'
+            ) from exc
     labels_final = step_labels(ocr_results, manifest)
     step_build(labels_final, connectors)
 
@@ -1234,12 +1418,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Splunk icon sheet → draw.io libraries')
     parser.add_argument(
         'step',
-        choices=('all', 'crops', 'ocr', 'labels', 'build'),
+        choices=('all', 'download', 'crops', 'ocr', 'labels', 'build'),
         help='pipeline step (default: all)',
         nargs='?',
         default='all',
     )
     args = parser.parse_args(argv)
+
+    if args.step == 'download':
+        download_sheet(force=True)
+        return 0
 
     if args.step == 'all':
         run_all()

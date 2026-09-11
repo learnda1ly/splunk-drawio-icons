@@ -9,18 +9,19 @@ The icon artwork is Splunk’s. This repo ships **scripts only**. Generated libr
 ## Quick start
 
 1. Install [uv](https://docs.astral.sh/uv/).
-2. Download the transparent PNG from [Draw a diagram of your deployment](https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment) and save it as `source/Splunk_Documentation_Icons_August2018.png` (see `source/README.md`).
-3. From the repo root:
+2. From the repo root:
 
 ```bash
 uv sync
-uv run python run_pipeline.py all    # crops → titles → libraries
+uv run python run_pipeline.py all    # downloads the PNG into source/ if missing, then builds libraries
 uv run python app.py                 # optional workbench → http://127.0.0.1:8765
 ```
 
-4. In draw.io: **File → Open Library From → Device** and choose a generated **`.xml`** file from your local `dist/` (not `.drawiolib`).
+The PNG comes from Splunk’s [Draw a diagram of your deployment](https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment) page (Transparent PNG) and is saved as `source/Splunk_Documentation_Icons_August2018.png`. The workbench has a **Download icon sheet** button that does the same. If Splunk moves the file, the download fails with that docs URL so you can save it by hand.
 
-For the August 2018 sheet you do **not** need to hand-label icons or draw extra crops. `canonical_titles.json` names each icon by grid position (row, left to right). `run_pipeline.py all` writes about 195 shapes plus connector presets. [EasyOCR](https://github.com/JaidedAI/EasyOCR) runs only if that catalog has no name for a detected icon. No Tesseract install, and no Jupyter.
+3. In draw.io: **File → Open Library From → Device** and choose a generated **`.xml`** file from your local `dist/` (not `.drawiolib`).
+
+`canonical_titles.json` names each icon by grid position and records the expected PNG size and checksum. `run_pipeline.py all` writes about 195 shapes plus connector presets.
 
 ## Workbench
 
@@ -28,9 +29,11 @@ Optional. After a pipeline run, open `uv run python app.py`.
 
 | Stage | What it does |
 |-------|----------------|
-| **Tutorial** | Import steps, library list, CLI, legal note |
-| **Labels** | Search or rename catalog titles, then rebuild XML |
-| **Custom crops** | Extra boxes only if the grid still missed an icon |
+| **Tutorial** | Download the sheet, import steps, library list |
+| **Labels** | Search or rename catalog titles, then rebuild XML. **Save to catalog** writes names back to `canonical_titles.json`. |
+| **Custom crops** | Overlay of auto-detected boxes; extra boxes only if the grid still missed an icon |
+
+Tests: `uv sync --group dev` then `uv run pytest`. Detection tests skip when the source PNG is not in `source/`.
 
 Saved title edits persist in local `dist/labels_final.json`. To change the default names for everyone, edit `canonical_titles.json` (names only, not Splunk artwork) and re-run the pipeline.
 
@@ -47,8 +50,8 @@ Saved title edits persist in local `dist/labels_final.json`. To change the defau
 On a configurable shape: **Fill** is the icon color (black in light mode, white in dark). **Line color** is an optional outline. **Edit → Edit Data** (`Ctrl+M` / `Cmd+M`) stores hostname, IP, and notes.
 
 ```bash
+uv run python run_pipeline.py download # fetch the PNG into source/ (overwrite)
 uv run python run_pipeline.py crops    # re-detect icons on the sheet
-uv run python run_pipeline.py ocr      # optional; only needed for uncatalogued icons
 uv run python run_pipeline.py labels   # apply catalog / saved titles
 uv run python run_pipeline.py build    # libraries from existing local dist/ data
 ```

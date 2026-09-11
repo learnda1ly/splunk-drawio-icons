@@ -97,6 +97,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   vertical-align: top;
 }
 .tutorial th { background: #fafafa; }
+.download-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+#download-status {
+  flex: 1;
+  min-width: 12rem;
+  white-space: pre-wrap;
+  font-size: 13px;
+}
 .status-list { list-style: none; padding: 0; }
 .status-list li { margin: 4px 0; }
 .ok { color: var(--ok); }
@@ -169,6 +181,30 @@ label.show-done {
   border-radius: 4px;
 }
 #sheet { display: block; max-width: none; user-select: none; -webkit-user-drag: none; }
+#detectLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.detect-box {
+  position: absolute;
+  border: 1px solid rgba(248, 128, 24, 0.9);
+  background: rgba(248, 128, 24, 0.12);
+  box-sizing: border-box;
+}
+.detect-box span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font: 11px/1.2 system-ui, sans-serif;
+  color: #5a3200;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 1px 4px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 #sel {
   position: absolute;
   border: 2px solid var(--accent);

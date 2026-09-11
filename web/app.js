@@ -21,8 +21,10 @@
     const el = document.getElementById('env-status');
     try {
       const s = await fetch('/api/status').then((r) => r.json());
+      const docs = document.getElementById('sheet-docs-link');
+      if (docs && s.docs_url) docs.href = s.docs_url;
       const rows = [
-        ['Source PNG', s.source, 'source/Splunk_Documentation_Icons_August2018.png'],
+        ['Source PNG', s.source, 'source/' + (s.sheet_name || 'Splunk_Documentation_Icons_August2018.png')],
         ['Title catalog', s.catalog, 'canonical_titles.json'],
         ['Labels', s.labels, 'dist/labels_final.json'],
       ];
@@ -42,6 +44,35 @@
     }
   }
   loadStatus();
+
+  const dlBtn = document.getElementById('download-sheet');
+  const dlMsg = document.getElementById('download-status');
+  dlBtn.onclick = async () => {
+    dlBtn.disabled = true;
+    dlMsg.className = '';
+    dlMsg.textContent = 'Downloading into source/…';
+    try {
+      const r = await fetch('/api/download-sheet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: 'bad response' }));
+      if (!r.ok || !j.ok) {
+        dlMsg.className = 'bad';
+        dlMsg.textContent = j.error || 'Download failed';
+        return;
+      }
+      dlMsg.className = 'ok';
+      dlMsg.textContent = 'Saved ' + (j.path || 'source/Splunk_Documentation_Icons_August2018.png');
+      loadStatus();
+    } catch (err) {
+      dlMsg.className = 'bad';
+      dlMsg.textContent = String(err);
+    } finally {
+      dlBtn.disabled = false;
+    }
+  };
 
   function esc(s) {
     return String(s)
@@ -120,6 +151,7 @@
         </div>`;
       el.querySelector('input').oninput = (e) => {
         row.title = e.target.value;
+        row.source = 'user';
         dirty.add(row.id);
         el.classList.add('changed');
         setLabelStatus('unsaved changes');
@@ -167,6 +199,21 @@
     renderLabels();
     setLabelStatus('saved ' + new Date().toLocaleTimeString(), true);
   };
+  document.getElementById('saveCatalog').onclick = async () => {
+    const r = await fetch('/api/catalog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labels }),
+    });
+    const j = await r.json().catch(() => ({ ok: false, error: 'bad response' }));
+    if (!r.ok || !j.ok) {
+      setLabelStatus('catalog save failed: ' + (j.error || r.status), false);
+      return;
+    }
+    dirty.clear();
+    renderLabels();
+    setLabelStatus('wrote ' + j.titles + ' titles to canonical_titles.json', true);
+  };
   document.getElementById('rebuildLabels').onclick = () => rebuild(labelStatus);
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's' && currentStage() === 'labels') {
@@ -184,6 +231,35 @@
   const wrap = document.getElementById('wrap');
   const cropEmpty = document.getElementById('cropEmpty');
   const cropStatus = document.getElementById('cropStatus');
+  const detectLayer = document.getElementById('detectLayer');
+  const showDetect = document.getElementById('showDetect');
+  let detections = [];
+
+  function layoutDetections() {
+    if (!detectLayer || !sheet.naturalWidth) return;
+    detectLayer.innerHTML = '';
+    if (!showDetect.checked) return;
+    const wr = wrap.getBoundingClientRect();
+    const sr = sheet.getBoundingClientRect();
+    const sx = sr.width / sheet.naturalWidth;
+    const sy = sr.height / sheet.naturalHeight;
+    const ox = sr.left - wr.left;
+    const oy = sr.top - wr.top;
+    for (const box of detections) {
+      const el = document.createElement('div');
+      el.className = 'detect-box';
+      el.style.left = ox + box.x * sx + 'px';
+      el.style.top = oy + box.y * sy + 'px';
+      el.style.width = box.w * sx + 'px';
+      el.style.height = box.h * sy + 'px';
+      if (box.title) {
+        const cap = document.createElement('span');
+        cap.textContent = box.title;
+        el.appendChild(cap);
+      }
+      detectLayer.appendChild(el);
+    }
+  }
 
   function imgPt(clientX, clientY) {
     const r = sheet.getBoundingClientRect();
@@ -269,7 +345,7 @@
       cropEmpty.hidden = false;
       wrap.hidden = true;
       cropEmpty.textContent =
-        'Missing source/Splunk_Documentation_Icons_August2018.png. Download it from Splunk docs, then reload.';
+        'Missing source PNG. Use Download icon sheet on Tutorial, then reload.';
       cropsReady = true;
       return;
     }
@@ -283,7 +359,13 @@
     cropStatus.style.color = '#0a7';
     cropsReady = true;
     loadCropList();
+    detections = await fetch('/api/detections').then((r) => r.json()).catch(() => []);
+    layoutDetections();
+    document.getElementById('main').addEventListener('scroll', layoutDetections);
+    window.addEventListener('resize', layoutDetections);
   }
+
+  showDetect.onchange = layoutDetections;
 
   document.getElementById('saveCrop').onclick = async () => {
     if (!rect) return;

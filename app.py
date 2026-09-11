@@ -123,13 +123,55 @@ def rebuild_libraries() -> None:
     step_build(json.loads(LABELS.read_text()), connectors)
 
 
+def detections() -> list[dict]:
+    """Auto-detected crop boxes for the workbench overlay."""
+    if LABELS.is_file():
+        items = json.loads(LABELS.read_text())
+        out = []
+        for item in items:
+            if item.get('custom'):
+                continue
+            if not all(k in item for k in ('x', 'y', 'w', 'h')):
+                continue
+            out.append({
+                'x': item['x'],
+                'y': item['y'],
+                'w': item['w'],
+                'h': item['h'],
+                'title': item.get('title') or '',
+                'icon_row': item.get('icon_row'),
+                'col': item.get('col'),
+            })
+        if out:
+            return out
+    manifest = DIST / 'manifest.json'
+    if not manifest.is_file():
+        return []
+    return [
+        {
+            'x': item['x'],
+            'y': item['y'],
+            'w': item['w'],
+            'h': item['h'],
+            'title': '',
+            'icon_row': item.get('icon_row'),
+            'col': item.get('col'),
+        }
+        for item in json.loads(manifest.read_text())
+    ]
+
+
 def api_status() -> dict:
+    from splunk_icons_pipeline import sheet_docs_url
+
     return {
         'source': SOURCE.is_file(),
         'catalog': (ROOT / 'canonical_titles.json').is_file(),
         'labels': LABELS.is_file(),
         'custom_crops': CUSTOM.is_file(),
         'libraries': {name: (DIST / name).is_file() for name in LIBRARIES},
+        'docs_url': sheet_docs_url(),
+        'sheet_name': SOURCE.name,
     }
 
 
@@ -177,6 +219,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
         if path == '/api/status':
             self._json(200, api_status())
+            return
+        if path == '/api/detections':
+            self._json(200, detections())
             return
         if path == '/api/labels':
             self._json(200, load_all_labels())
@@ -238,6 +283,40 @@ class Handler(BaseHTTPRequestHandler):
                 return
             save_all_labels(labels)
             self._json(200, {'ok': True})
+            return
+
+        if path == '/api/catalog':
+            labels = body.get('labels')
+            if not isinstance(labels, list):
+                self._json(400, {'ok': False, 'error': 'labels must be a list'})
+                return
+            save_all_labels(labels)
+            try:
+                from splunk_icons_pipeline import write_canonical_from_labels
+                doc = write_canonical_from_labels(labels)
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {'ok': False, 'error': str(exc)})
+                return
+            n = sum(len(r) for r in doc.get('rows') or [])
+            self._json(200, {'ok': True, 'titles': n})
+            return
+
+        if path == '/api/download-sheet':
+            try:
+                from splunk_icons_pipeline import SHEET, SheetDownloadError, download_sheet
+
+                download_sheet(force=True)
+            except SheetDownloadError as exc:
+                self._json(502, {'ok': False, 'error': str(exc)})
+                return
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {'ok': False, 'error': str(exc)})
+                return
+            self._json(200, {
+                'ok': True,
+                'path': str(SHEET.relative_to(ROOT)),
+                'bytes': SHEET.stat().st_size,
+            })
             return
 
         if path == '/api/rebuild':

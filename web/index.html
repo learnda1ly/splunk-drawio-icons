@@ -20,26 +20,30 @@
   <section class="stage" data-stage="tutorial" id="stage-tutorial">
     <article class="tutorial">
       <h1>Tutorial</h1>
-      <p>Unofficial local tooling: download Splunk’s documentation icon sheet, build draw.io libraries on <em>your</em> machine, and use them to diagram a Splunk deployment. This is not a Splunk product and is not endorsed by Splunk.</p>
-      <p><strong>This repo does not ship the icons.</strong> Put the PNG in <code>source/</code>, run the pipeline so files appear under local <code>dist/</code>, then import those <code>.xml</code> files into draw.io.</p>
+      <p>Unofficial local tool: turn Splunk’s documentation icon sheet into draw.io libraries on your machine. Not a Splunk product.</p>
+      <p>This repo does not ship the icons.</p>
 
-      <h2>This workbench</h2>
-      <p>One local app, three stages:</p>
-      <ol>
-        <li><strong>Tutorial</strong> — this page.</li>
-        <li><a href="#labels">Labels</a> — search or rename catalog titles, then rebuild. The August 2018 sheet is already named.</li>
-        <li><a href="#crops">Custom crops</a> — optional extra boxes only if the grid still missed an icon (Form Inputs and Panels are auto-detected).</li>
-      </ol>
-      <p>Build libraries from the CLI. This workbench is for optional edits. You do not need Jupyter or Tesseract.</p>
+      <h2>1. Get the icon sheet</h2>
+      <p>The current file is the Transparent PNG on Splunk’s
+        <a id="sheet-docs-link" href="https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment">Draw a diagram of your deployment</a>
+        page. This workbench saves it as <code>source/Splunk_Documentation_Icons_August2018.png</code>.</p>
+      <p class="download-row">
+        <button class="primary" id="download-sheet" type="button">Download icon sheet</button>
+        <span id="download-status"></span>
+      </p>
 
-      <h2>Status</h2>
-      <ul class="status-list" id="env-status"><li>Checking…</li></ul>
+      <h2>2. Build libraries</h2>
+      <p>Python 3.10+ and <a href="https://docs.astral.sh/uv/">uv</a>, from the repo root:</p>
+      <pre><code>uv sync
+uv run python run_pipeline.py all
+uv run python app.py</code></pre>
+      <p><code>run_pipeline.py all</code> also downloads the PNG into <code>source/</code> if it is missing. Titles come from <code>canonical_titles.json</code>.</p>
 
-      <h2 id="import">Import into draw.io</h2>
+      <h2>3. Import into draw.io</h2>
       <ol>
         <li>Open <a href="https://app.diagrams.net/">diagrams.net</a> or the desktop app.</li>
-        <li><strong>File → Open Library From → Device</strong> (not Import — that opens diagrams).</li>
-        <li>Choose a generated <code>.xml</code> from your local <code>dist/</code> (or the links below after you have built). Draw.io does not import <code>.drawiolib</code>.</li>
+        <li><strong>File → Open Library From → Device</strong> (not Import).</li>
+        <li>Choose a generated <code>.xml</code> from local <code>dist/</code> (or the links below after a build). Draw.io does not import <code>.drawiolib</code>.</li>
         <li>Enable the library in the left sidebar if needed (<strong>+</strong> / <strong>More Shapes</strong>).</li>
       </ol>
       <table>
@@ -47,11 +51,11 @@
         <tbody>
           <tr>
             <td><a href="/libraries/Splunk-Icons-configurable.xml" download>Splunk-Icons-configurable.xml</a></td>
-            <td>Native stencils — Style panel fill/line, hostname/IP via Edit Data. Closest to Visio.</td>
+            <td>Native stencils — Style panel fill/line, hostname/IP via Edit Data.</td>
           </tr>
           <tr>
             <td><a href="/libraries/Splunk-Icons-adaptive.xml" download>Splunk-Icons-adaptive.xml</a></td>
-            <td>Theme-aware picture icons for light and dark canvases (not Style-panel fill).</td>
+            <td>Theme-aware picture icons for light and dark canvases.</td>
           </tr>
           <tr>
             <td><a href="/libraries/Splunk-Icons-color.xml" download>Splunk-Icons-color.xml</a></td>
@@ -63,31 +67,21 @@
           </tr>
           <tr>
             <td><a href="/libraries/Splunk-Connectors.xml" download>Splunk-Connectors.xml</a></td>
-            <td>Splunk-style connector presets.</td>
+            <td>Connector presets.</td>
           </tr>
         </tbody>
       </table>
-      <p>On a <strong>configurable</strong> shape: Fill is the icon color (black in light mode, white in dark). Line color is an optional outline. <strong>Edit → Edit Data</strong> (<kbd>Ctrl+M</kbd> / <kbd>Cmd+M</kbd>) stores <code>hostname</code>, <code>ip</code>, and <code>notes</code> on that instance. Hover for N/E/S/W connection points.</p>
-      <p>Draw.io cannot recolor PNG pixels, keep official multi-color art <em>and</em> a single Fill picker, or provide Visio ShapeSheet formulas. Edit Data plus <code>%placeholder%</code> labels is the equivalent.</p>
+      <p>On a <strong>configurable</strong> shape: Fill is the icon color. Line color is an optional outline. <strong>Edit → Edit Data</strong> (<kbd>Ctrl+M</kbd> / <kbd>Cmd+M</kbd>) stores <code>hostname</code>, <code>ip</code>, and <code>notes</code>.</p>
 
-      <h2>Setup (rebuild from source)</h2>
-      <p>Python 3.10+ and <a href="https://docs.astral.sh/uv/">uv</a>, then from the repo root:</p>
-      <pre><code>uv sync
-uv run python run_pipeline.py all    # crops → titles → libraries
-uv run python app.py                 # this workbench → http://127.0.0.1:8765</code></pre>
-      <p>Download Splunk’s sheet from <a href="https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment">Draw a diagram of your deployment</a> and save it as <code>source/Splunk_Documentation_Icons_August2018.png</code> (gitignored) before the pipeline run. Titles come from <code>canonical_titles.json</code> by grid position. OCR runs only for icons that file does not name.</p>
+      <h2>This workbench</h2>
+      <p><a href="#labels">Labels</a> — rename titles; <strong>Save to catalog</strong> writes <code>canonical_titles.json</code>. <a href="#crops">Custom crops</a> — only if the grid missed an icon. After either, click <strong>Rebuild XML</strong>.</p>
 
-      <h2>CLI pipeline</h2>
-      <pre><code>uv run python run_pipeline.py all      # crops → titles → libraries (OCR if needed)
-uv run python run_pipeline.py crops
-uv run python run_pipeline.py ocr
-uv run python run_pipeline.py labels
-uv run python run_pipeline.py build    # same as Rebuild in Labels / Custom crops</code></pre>
-      <p>After you save titles or extra crops here, click <strong>Rebuild XML</strong> so <code>dist/Splunk-Icons-*.xml</code> updates. You do not need custom crops for the stock August 2018 sheet.</p>
+      <h2>Status</h2>
+      <ul class="status-list" id="env-status"><li>Checking…</li></ul>
 
       <h2>Legal</h2>
-      <p>The icon sheet and anything derived from it (crops, PNGs, SVGs, stencils, libraries) are Splunk copyrighted material. Splunk’s docs offer the PNG so you can diagram a Splunk deployment. Their <a href="https://www.splunk.com/en_us/legal/terms/terms-of-use.html">website terms</a> do not grant a license to republish or distribute the artwork. Do not commit <code>source/*.png</code> or <code>dist/</code>.</p>
-      <p>Use generated libraries in your own diagrams that refer to Splunk products. Do not imply Splunk affiliation, sponsorship, or endorsement. “Splunk” is used only to describe compatibility with Splunk documentation icons.</p>
+      <p>The icon sheet and anything derived from it are Splunk copyrighted material. Splunk’s docs offer the PNG so you can diagram a Splunk deployment. Their <a href="https://www.splunk.com/en_us/legal/terms/terms-of-use.html">website terms</a> do not grant a license to republish the artwork. Do not commit <code>source/*.png</code> or <code>dist/</code>.</p>
+      <p>Use generated libraries in your own diagrams that refer to Splunk products. Do not imply Splunk affiliation. “Splunk” is used only to describe compatibility with Splunk documentation icons.</p>
       <p>Splunk, Splunk&gt;, and Turn Data Into Doing are trademarks or registered trademarks of Splunk LLC in the United States and other countries. All other brand names, product names, or trademarks belong to their respective owners. © Splunk LLC. All rights reserved.</p>
     </article>
   </section>
@@ -97,6 +91,7 @@ uv run python run_pipeline.py build    # same as Rebuild in Labels / Custom crop
       <input id="q" placeholder="Filter…" />
       <label class="show-done"><input type="checkbox" id="showDone"> Show completed</label>
       <button class="primary" id="save" type="button">Save</button>
+      <button id="saveCatalog" type="button">Save to catalog</button>
       <button id="rebuildLabels" type="button">Rebuild XML</button>
       <span class="meta" id="count"></span>
       <span class="status" id="labelStatus"></span>
@@ -108,6 +103,7 @@ uv run python run_pipeline.py build    # same as Rebuild in Labels / Custom crop
   <section class="stage" data-stage="crops" id="stage-crops">
     <div class="toolbar">
       <span class="hint">Full resolution · drag to select · scroll to pan. Use only for icons the pipeline missed.</span>
+      <label class="show-done"><input type="checkbox" id="showDetect" checked> Show auto crops</label>
       <input id="cropTitle" placeholder="Title (optional)" style="min-width:160px">
       <button class="primary" id="saveCrop" type="button" disabled>Save crop</button>
       <button id="rebuildCrops" type="button">Rebuild XML</button>
@@ -119,6 +115,7 @@ uv run python run_pipeline.py build    # same as Rebuild in Labels / Custom crop
         <p id="cropEmpty" class="empty" hidden></p>
         <div class="wrap" id="wrap" hidden>
           <img id="sheet" alt="source sheet">
+          <div id="detectLayer"></div>
           <div id="sel"></div>
         </div>
       </div>

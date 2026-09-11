@@ -1,5 +1,12 @@
 {
-  "sheet": "Splunk_Documentation_Icons_August2018.png",
+  "sheet": {
+    "file": "Splunk_Documentation_Icons_August2018.png",
+    "docs_url": "https://help.splunk.com/en/splunk-enterprise/administer/inherit-a-splunk-deployment/10.4/inherited-deployment-tasks/draw-a-diagram-of-your-deployment",
+    "width": 13137,
+    "height": 24770,
+    "sha256": "40453cdb23553b5be4c5bed6628d64fedff83abd57904a594535b0c52a3e5a6b",
+    "bytes": 10380502
+  },
   "note": "Icon titles by sheet row, left to right. Names only \u2014 not Splunk artwork.",
   "rows": [
     [
@@ -83,7 +90,7 @@
       "Indexer, Mac",
       "Indexer, Solaris",
       "Indexer, Windows",
-      "Forwarder With Load Balancer",
+      "Indexer With Load Balancer",
       "Indexer With Router",
       "Indexers"
     ],
@@ -156,7 +163,7 @@
       "Web Interface"
     ],
     [
-      "Web Interface",
+      "Splunk Web",
       "Splunk Cloud",
       "Enterprise Security",
       "Splunk IT Service Intelligence",
@@ -173,7 +180,7 @@
       "License Master"
     ],
     [
-      "Summaries",
+      "Hadoop",
       "External Nodes",
       "Virtual Index",
       "Distributed Management Console",
