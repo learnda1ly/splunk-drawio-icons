@@ -1,0 +1,16 @@
+[project]
+name = "splunk-drawio-icons"
+version = "0.1.0"
+description = "Build draw.io shape libraries from Splunk’s documentation icon sheet"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+    "pytesseract>=0.3.10",
+    "scipy>=1.10.0",
+    "vtracer>=0.6.15",
+]
+
+[tool.uv]
+package = false

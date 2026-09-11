@@ -1,7 +1,4 @@
-"""Splunk icon sheet → draw.io libraries (pipeline implementation)."""
-
-
-# ----- notebook cell 3 -----
+"""Splunk icon sheet → draw.io libraries."""
 
 import base64
 import difflib
@@ -434,7 +431,6 @@ def load_sheet() -> Image.Image:
         'or set DIRECT_PNG_URL in splunk_icons_pipeline.py.'
     )
 
-# ----- notebook cell 7 -----
 
 def scan_row_bands(
     proj: np.ndarray,
@@ -794,8 +790,6 @@ def step_crops(sheet: Image.Image) -> tuple[list[dict], list[dict]]:
     return manifest, connectors
 
 
-# ----- notebook cell 9 -----
-
 def run_ocr_pass(sheet: Image.Image, manifest: list[dict]) -> list[dict]:
     """OCR every icon label band; labels are alpha-only text below each grid cell."""
     ocr_results = []
@@ -819,10 +813,6 @@ def run_ocr_pass(sheet: Image.Image, manifest: list[dict]) -> list[dict]:
              len(ocr_results), sum(1 for r in ocr_results if r['raw_ocr']), time.perf_counter() - t0)
     return ocr_results
 
-
-
-
-# ----- notebook cell 11 -----
 
 KNOWN_TITLES = [
     'Alert', 'Add-on', 'App', 'Application', 'Base', 'Bucket', 'Cluster', 'Cloud',

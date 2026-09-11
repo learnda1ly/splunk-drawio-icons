@@ -2,8 +2,6 @@
 __pycache__/
 .ipynb_checkpoints/
 source/*.png
-dist/_debug/
-dist/_crop_picker_preview.*
-dist/.$*
+dist/
 *.pyc
 .DS_Store
